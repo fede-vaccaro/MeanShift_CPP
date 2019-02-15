@@ -15,26 +15,30 @@
 #include "csvio.h"
 
 const float rev_sqrt_two_pi = 1. / sqrt(2 * 3.1415);
-#define MAX_ITERATIONS 15
+#define MAX_ITERATIONS 50
+
+#define rev_sqrt_two_pi 0.3989422804
+#define rev_two_pi rev_sqrt_two_pi*rev_sqrt_two_pi
+
 
 float gaussian_kernel(float dist2, float bandwidth) {
-	const float rev_bandwidth = 1. / bandwidth;
-	const float d2_frac_b2 = dist2 * rev_bandwidth * rev_bandwidth;
-	float div = 1. / (bandwidth * rev_sqrt_two_pi);
-	float exp_ = div * std::exp(-0.5 * d2_frac_b2);
-	return exp_;
+    const float rev_bandwidth = 1. / bandwidth;
+    const float d2_frac_b2 = dist2 * rev_bandwidth * rev_bandwidth;
+    float div = 1. / rev_two_pi * rev_bandwidth;
+    float exp_ = div * expf(- 0.5 * d2_frac_b2);
+    return exp_;
 }
 
 #define MASK_W 61
 #define MASK_RADIUS MASK_W/2
 
-#define BW 2.2
+#define BW 2.0
 #define TH 10.*BW
 
 void ms_iteration(float *X, const float *I, const int w, const int h,
 		const int c) {
 	//iterate over O, X
-//#pragma omp parallel for
+#pragma omp parallel for
 	for (int i = 0; i < h; ++i) {
 		for (int j = 0; j < w; ++j) {
 			// for every pixel
@@ -67,25 +71,25 @@ void ms_iteration(float *X, const float *I, const int w, const int h,
 	}
 }
 
-void ms_iteration_2D(float *X, const float *I, const int nPoints) {
+void ms_iteration_2D(float *X, const float *I, const float * originalPoints, const int nPoints) {
 	//iterate over O, X
 	const int dim = 2;
-//#pragma omp parallel for
+#pragma omp parallel for
 	for (int i = 0; i < nPoints; i++) {
 		// for every pixel
 		glm::f32vec2 numerator = glm::f32vec2(0.0, 0.0);
 		float denominator = 0.0;
 
 		int it = i * dim;
-		glm::f32vec2 pixel = glm::f32vec2(I[it], I[it + 1]);
+		glm::f32vec2 y_i = glm::f32vec2(I[it], I[it + 1]);
 		for (int n_i = 0; n_i < nPoints; ++n_i) {
 			int n_row = n_i;
 			int it = n_row * dim;
 
-			glm::f32vec2 n_pixel = glm::f32vec2(I[it], I[it + 1]);
-			float distance2 = glm::distance2(pixel, n_pixel);
+			glm::f32vec2 x_j = glm::f32vec2(originalPoints[it], originalPoints[it + 1]);
+			float distance2 = glm::distance2(y_i, x_j);
 			float weight = gaussian_kernel(distance2, BW);
-			numerator += n_pixel * weight;
+			numerator += x_j * weight;
 			denominator += weight;
 		}
 		numerator /= denominator;
@@ -98,31 +102,33 @@ int main() {
 
 	std::vector<float> inputData;
 
-	float * InputData_ptr;
-	float * OutputData_ptr;
+	float * InputPoints_ptr;
+	float * OutputPoints_ptr;
+	float * OriginalPoints_ptr;
 
 	std::string delimiter = ";";
-	std::string filename = "datasets/dataset50000.csv";
+	std::string filename = "dataset5000.csv";
 	//write2VecTo(filename, delimiter, inputData);
 	read2VecFrom(filename, delimiter, inputData);
 
-	InputData_ptr = new float[inputData.size()];
-	OutputData_ptr = new float[inputData.size()];
+	OriginalPoints_ptr = new float[inputData.size()];
+	InputPoints_ptr = new float[inputData.size()];
+	OutputPoints_ptr = new float[inputData.size()];
 	const int nPoints = inputData.size() / 2;
 
 	for (int i = 0; i < inputData.size(); i++) {
-		InputData_ptr[i] = inputData[i];
+		OriginalPoints_ptr[i] = InputPoints_ptr[i] = inputData[i];
 	}
 	inputData.resize(0);
 
 	double t1 = omp_get_wtime();
 	for (int i = 0; i < MAX_ITERATIONS; i++) {
 		std::cout << "Iteration n: " << i << " started." << std::endl;
-		ms_iteration_2D(OutputData_ptr, InputData_ptr, nPoints);
-		// new image become the input. the old input is now writable
-		std::swap(InputData_ptr, OutputData_ptr);
+		ms_iteration_2D(OutputPoints_ptr, InputPoints_ptr, OriginalPoints_ptr, nPoints);
+		// new shifted point set become the input. the old input is now writable
+		std::swap(InputPoints_ptr, OutputPoints_ptr);
 	}
-	std::swap(InputData_ptr, OutputData_ptr);
+	std::swap(InputPoints_ptr, OutputPoints_ptr);
 	double t2 = omp_get_wtime() - t1;
 	std::cout << "Mean Shift completed in: " << t2 << std::endl;
 
@@ -130,7 +136,7 @@ int main() {
 	inputData.resize(nPoints * 2);
 	std::vector<float> outputData(nPoints*2);
 	for (int i = 0; i < outputData.size(); i++) {
-		outputData[i] = OutputData_ptr[i];
+		outputData[i] = OutputPoints_ptr[i];
 	}
 	write2VecTo(std::string("results.csv"), delimiter, inputData);
 
@@ -166,6 +172,10 @@ int main() {
 	std::cout << "Time to find clusters: " << t2 << std::endl;
 
 	write2VecTo(std::string("results.csv"), delimiter, outputData);
+
+	delete[] InputPoints_ptr;
+	delete[] OutputPoints_ptr;
+	delete[] OriginalPoints_ptr;
 
 	return 0;
 }
